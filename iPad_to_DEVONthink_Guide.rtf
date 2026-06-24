@@ -4,7 +4,7 @@
 \f0\fs22\cf1
 \pard\sb240\sa60\b\fs32 iPad → DEVONthink: Multi-Page Document Capture\b0\par
 \par
-\pard Two complementary methods depending on what you are looking at on the iPad.\par
+\pard Four methods depending on what you are capturing and where you are in the workflow.\par
 \par
 \pard\brdrb\brdrs\brdrw10\brdr0\par
 \par
@@ -21,9 +21,57 @@
 \par
 \pard\brdrb\brdrs\brdrw10\brdr0\par
 \par
-\pard\sb200\sa60\b\fs28 Method 2 – iOS Shortcut for any app (PDFs, emails, documents, maps…)\b0\par
+\pard\sb200\sa60\b\fs28 Method 2 – Markup screenshot direct to a DTTG group (recommended for New Scientist etc.)\b0\par
 \par
-\pard Create the following Shortcut in the \b Shortcuts\b0 app on your iPad.\par
+\pard This method replaces the cumbersome route of Markup → Save to Files → navigate to Files → share to DTTG. Instead, you share directly from inside Markup and the file lands in the correct DTTG group in one step.\par
+\par
+\pard\sb160\sa40\b\fs24 How it works\b0\par
+\par
+\pard DEVONthink To Go provides its own \b Shortcuts actions\b0, including "Create Item in DEVONthink To Go", which can receive a file and place it into a named database and group — no DTTG interface interaction required. A Shortcut placed in the iOS Share Sheet becomes available as a one-tap action from anywhere: Markup, Files, Photos, Safari, or any other app.\par
+\par
+\pard\sb160\sa40\b\fs24 One-time setup: create the Shortcut\b0\par
+\par
+\pard Open the \b Shortcuts\b0 app on your iPad and create a new Shortcut named \b "File to DTTG"\b0.\par
+\par
+\b Step  |  Action  |  Setting\b0\par
+\b 1  |  **Receive** input  |  Type: Any · From: Share Sheet and Shortcuts\b0\par
+\b 2  |  **Choose from Menu**  |  Prompt: "File to which group?"\b0\par
+\b 3  |  ↳ Menu item: **"New Scientist"**  |  —\b0\par
+\b 4  |  ↳↳ **Create Item in DEVONthink To Go**  |  Item: Shortcut Input · Database: (your database) · Group: New Scientist\b0\par
+\b 5  |  ↳ Menu item: **"Fire Defence"**  |  —\b0\par
+\b 6  |  ↳↳ **Create Item in DEVONthink To Go**  |  Item: Shortcut Input · Database: (your database) · Group: Fire Defence\b0\par
+\b 7  |  ↳ Menu item: **"Inbox"**  |  —\b0\par
+\b 8  |  ↳↳ **Create Item in DEVONthink To Go**  |  Item: Shortcut Input · Database: (your database) · Group: Inbox\b0\par
+\par
+\pard Add or remove menu items to match your actual DTTG groups. The "Create Item in DEVONthink To Go" action is found by searching \b "DEVONthink"\b0 in the Shortcuts action library — it only appears after DTTG is installed.\par
+\par
+\pard\sb160\sa40\b\fs24 Using it from Markup\b0\par
+\par
+\pard\li360\fi-360 Take a screenshot (Side button + Volume Up) — or open an existing image in Markup.\par
+\pard\li360\fi-360 Annotate as needed in Markup.\par
+\pard\li360\fi-360 Tap the \b Share button\b0 (arrow-out-of-box, top right) — \b not\b0 Done → Save to Files.\par
+\pard\li360\fi-360 In the share sheet, tap \b "File to DTTG"\b0 (your Shortcut).\par
+\pard\li360\fi-360 Tap the group name you want.\par
+\pard\li360\fi-360 The file appears in that DTTG group immediately. Syncs to DEVONthink on your Mac via the Contabo syncstore.\par
+\par
+\pard\sb160\sa40\b\fs24 Using it from Files (for files already saved there)\b0\par
+\par
+\pard\li360\fi-360 Open \b Files\b0, navigate to the saved file.\par
+\pard\li360\fi-360 Long-press the file → \b Share\b0.\par
+\pard\li360\fi-360 Tap \b "File to DTTG"\b0 in the share sheet.\par
+\pard\li360\fi-360 Choose the group.\par
+\par
+\pard\sb160\sa40\b\fs24 Notes\b0\par
+\par
+\pard\li360\fi-360\bullet  The Shortcut works for any file type: PNG, JPG, PDF, even text files.\par
+\pard\li360\fi-360\bullet  If "Create Item in DEVONthink To Go" does not appear in the Shortcuts action library, check that DTTG is installed and open Settings → DEVONthink To Go → allow Siri & Shortcuts.\par
+\pard\li360\fi-360\bullet  The file goes straight into the group — DTTG does not need to be open or in the foreground.\par
+\par
+\pard\brdrb\brdrs\brdrw10\brdr0\par
+\par
+\pard\sb200\sa60\b\fs28 Method 3 – iOS Shortcut for multi-page scrolling documents\b0\par
+\par
+\pard Use this when the document is longer than one screen in an app that does not support Full Page export (not Safari).\par
 \par
 \pard\sb160\sa40\b\fs24 Shortcut steps\b0\par
 \par
@@ -37,47 +85,31 @@
 \b 7  |  ↳ If "No, done" → **Exit Repeat**  |  —\b0\par
 \b 8  |  **Combine Images**  |  Images: **screenshots** · Layout: Vertically\b0\par
 \b 9  |  **Make PDF**  |  Input: combined image · Page size: actual size\b0\par
-\b 10  |  **Share** PDF  |  Share with: **DEVONthink To Go**\b0\par
+\b 10  |  **Choose from Menu**  |  Prompt: "File to which group?" (same group menu as Method 2)\b0\par
+\b 11  |  ↳ **Create Item in DEVONthink To Go**  |  Item: PDF from step 9 · Group: chosen group\b0\par
 \par
 \pard\sb160\sa40\b\fs24 How to use it\b0\par
 \par
-\pard\li360\fi-360 Navigate to the first page of the document on your iPad.\par
-\pard\li360\fi-360 Run the Shortcut (add it to your Home Screen or the Share Sheet for one tap).\par
-\pard\li360\fi-360 Enter a title when prompted.\par
-\pard\li360\fi-360 Take screenshot, scroll down, tap \b "Yes"\b0, repeat for each page.\par
-\pard\li360\fi-360 When on the last page, tap \b "No, done"\b0.\par
-\pard\li360\fi-360 DEVONthink To Go opens automatically with the finished PDF ready to file.\par
+\pard\li360\fi-360 Navigate to the first screen of the document.\par
+\pard\li360\fi-360 Run the Shortcut from your Home Screen or the Shortcuts widget.\par
+\pard\li360\fi-360 Enter a title.\par
+\pard\li360\fi-360 Take screenshot, scroll, tap \b "Yes"\b0, repeat for each screen.\par
+\pard\li360\fi-360 On the last screen tap \b "No, done"\b0.\par
+\pard\li360\fi-360 Choose the DTTG group — the stitched PDF is filed immediately.\par
 \par
 \pard\brdrb\brdrs\brdrw10\brdr0\par
 \par
-\pard\sb200\sa60\b\fs28 Method 3 – Automatic Mac-side stitching (best image quality)\b0\par
+\pard\sb200\sa60\b\fs28 Method 4 – Automatic Mac-side stitching (best image quality, optional)\b0\par
 \par
-\pard Use this when you want overlap-trimming and higher-quality output.\par
+\pard Use this only when you need the overlap-trimming that the iOS Shortcut cannot provide — for example, very long documents where duplicate scroll regions are visible in the stitched result.\par
 \par
 \pard\sb160\sa40\b\fs24 Setup (one time, on your Mac)\b0\par
 \par
 \f1\fs18\cf2
-# Install dependencies\line
 pip3 install Pillow numpy watchdog\line
-\line
-# Clone / open the project folder\line
-cd ~/path/to/ARMAC-fire-defence\line
 \f0\fs22\cf1\par
 \par
-\pard\sb160\sa40\b\fs24 Configure iCloud sync\b0\par
-\par
-\pard On your iPad, enable \b iCloud Drive\b0 for the \b Screenshots\b0 album  \par
-\pard (Settings → [Your Name] → iCloud → Photos → turn on iCloud Photos).  \par
-\pard On your Mac, the screenshots appear at:\par
-\f1\fs18\cf2
-~/Library/Mobile Documents/com~apple~CloudDocs/\line
-\f0\fs22\cf1\par
-\par
-\pard Or use the dedicated \b Files\b0 app folder approach:\par
-\pard\li360\fi-360\bullet  On iPad: save screenshots to \b Files → iCloud Drive → Screenshots\b0\par
-\pard\li360\fi-360\bullet  Mac path: \f1\fs18 ~/Library/Mobile Documents/com~apple~CloudDocs/Screenshots\f0\fs22\par
-\par
-\pard\sb160\sa40\b\fs24 Watch mode (leave running on your Mac)\b0\par
+\pard\sb160\sa40\b\fs24 Watch mode\b0\par
 \par
 \f1\fs18\cf2
 python3 watch_and_import.py \\\line
@@ -85,29 +117,23 @@ python3 watch_and_import.py \\\line
     --group "Fire Defence"\line
 \f0\fs22\cf1\par
 \par
-\pard Every time you drop screenshots into the watched folder from your iPad\par
-\pard (they sync automatically via iCloud), the script:\par
-\pard\li360\fi-360 Waits 3 seconds for the batch to finish syncing.\par
-\pard\li360\fi-360 Stitches them vertically, trimming duplicate scroll regions.\par
-\pard\li360\fi-360 Saves a PDF next to the originals.\par
-\pard\li360\fi-360 Imports it into the specified DEVONthink group.\par
+\pard Screenshots synced via iCloud are automatically stitched, trimmed, and imported into DEVONthink on the Mac. DEVONthink then syncs the result back to DTTG via the Contabo syncstore.\par
 \par
 \pard\sb160\sa40\b\fs24 One-off manual stitch\b0\par
 \par
 \f1\fs18\cf2
-python3 stitch_to_devonthink.py \\\line
-    ~/Desktop/page1.png ~/Desktop/page2.png ~/Desktop/page3.png \\\line
-    --import \\\line
-    --group "Fire Defence"\line
+python3 stitch_to_devonthink.py page1.png page2.png page3.png \\\line
+    --import --group "Fire Defence"\line
 \f0\fs22\cf1\par
 \par
 \pard\brdrb\brdrs\brdrw10\brdr0\par
 \par
 \pard\sb200\sa60\b\fs28 Choosing the right method\b0\par
 \par
-\b Situation  |  Best method\b0\par
-\b Web page in Safari  |  Method 1 (Full Page screenshot)\b0\par
-\b PDF viewer, email, map, or any other app  |  Method 2 (Shortcut)\b0\par
-\b Need best quality / automatic trimming of overlap  |  Method 3 (Mac script)\b0\par
-\b No Mac available  |  Method 2 (Shortcut)\b0\par
+\b Situation  |  Method\b0\par
+\b Web page in Safari  |  1 – Full Page screenshot\b0\par
+\b Markup screenshot or any single-page file  |  2 – "File to DTTG" Shortcut via Share button\b0\par
+\b File already saved in the Files app  |  2 – same Shortcut, from Files share sheet\b0\par
+\b Multi-page scrolling document, any app  |  3 – screenshot loop Shortcut\b0\par
+\b Very long document, overlap trimming needed  |  4 – Mac script\b0\par
 }

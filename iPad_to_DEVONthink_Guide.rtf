@@ -1,0 +1,113 @@
+{\rtf1\ansi\deff0
+{\fonttbl{\f0 Calibri;}{\f1 Courier New;}}
+{\colortbl ;\red0\green0\blue0;\red50\green50\blue50;}
+\f0\fs22\cf1
+\pard\sb240\sa60\b\fs32 iPad → DEVONthink: Multi-Page Document Capture\b0\par
+\par
+\pard Two complementary methods depending on what you are looking at on the iPad.\par
+\par
+\pard\brdrb\brdrs\brdrw10\brdr0\par
+\par
+\pard\sb200\sa60\b\fs28 Method 1 – Safari web pages (easiest, no extra tools)\b0\par
+\par
+\pard\li360\fi-360 Open the page in Safari.\par
+\pard\li360\fi-360 Take a screenshot (Side button + Volume Up).\par
+\pard\li360\fi-360 Tap the \b preview thumbnail\b0 in the bottom-left corner.\par
+\pard\li360\fi-360 Tap \b "Full Page"\b0 at the top of the editor.\par
+\pard    - Safari renders the entire page as a single tall PDF automatically.\par
+\pard\li360\fi-360 Tap the \b Share\b0 button → \b DEVONthink To Go\b0 → choose your group → \b Import\b0.\par
+\par
+\pard This works for any website and requires nothing extra.\par
+\par
+\pard\brdrb\brdrs\brdrw10\brdr0\par
+\par
+\pard\sb200\sa60\b\fs28 Method 2 – iOS Shortcut for any app (PDFs, emails, documents, maps…)\b0\par
+\par
+\pard Create the following Shortcut in the \b Shortcuts\b0 app on your iPad.\par
+\par
+\pard\sb160\sa40\b\fs24 Shortcut steps\b0\par
+\par
+\b Step  |  Action  |  Setting\b0\par
+\b 1  |  **Ask for Input**  |  Prompt: "Document title?" · Input type: Text\b0\par
+\b 2  |  Set variable  |  **doc_title** ← Shortcut Input\b0\par
+\b 3  |  **Repeat**  |  (loop indefinitely)\b0\par
+\b 4  |  ↳ Take Screenshot  |  —\b0\par
+\b 5  |  ↳ Add to Variable  |  Variable: **screenshots**\b0\par
+\b 6  |  ↳ **Choose from Menu**  |  Prompt: "More pages?" · Options: "Yes, scroll & continue" / "No, done"\b0\par
+\b 7  |  ↳ If "No, done" → **Exit Repeat**  |  —\b0\par
+\b 8  |  **Combine Images**  |  Images: **screenshots** · Layout: Vertically\b0\par
+\b 9  |  **Make PDF**  |  Input: combined image · Page size: actual size\b0\par
+\b 10  |  **Share** PDF  |  Share with: **DEVONthink To Go**\b0\par
+\par
+\pard\sb160\sa40\b\fs24 How to use it\b0\par
+\par
+\pard\li360\fi-360 Navigate to the first page of the document on your iPad.\par
+\pard\li360\fi-360 Run the Shortcut (add it to your Home Screen or the Share Sheet for one tap).\par
+\pard\li360\fi-360 Enter a title when prompted.\par
+\pard\li360\fi-360 Take screenshot, scroll down, tap \b "Yes"\b0, repeat for each page.\par
+\pard\li360\fi-360 When on the last page, tap \b "No, done"\b0.\par
+\pard\li360\fi-360 DEVONthink To Go opens automatically with the finished PDF ready to file.\par
+\par
+\pard\brdrb\brdrs\brdrw10\brdr0\par
+\par
+\pard\sb200\sa60\b\fs28 Method 3 – Automatic Mac-side stitching (best image quality)\b0\par
+\par
+\pard Use this when you want overlap-trimming and higher-quality output.\par
+\par
+\pard\sb160\sa40\b\fs24 Setup (one time, on your Mac)\b0\par
+\par
+\f1\fs18\cf2
+# Install dependencies\line
+pip3 install Pillow numpy watchdog\line
+\line
+# Clone / open the project folder\line
+cd ~/path/to/ARMAC-fire-defence\line
+\f0\fs22\cf1\par
+\par
+\pard\sb160\sa40\b\fs24 Configure iCloud sync\b0\par
+\par
+\pard On your iPad, enable \b iCloud Drive\b0 for the \b Screenshots\b0 album  \par
+\pard (Settings → [Your Name] → iCloud → Photos → turn on iCloud Photos).  \par
+\pard On your Mac, the screenshots appear at:\par
+\f1\fs18\cf2
+~/Library/Mobile Documents/com~apple~CloudDocs/\line
+\f0\fs22\cf1\par
+\par
+\pard Or use the dedicated \b Files\b0 app folder approach:\par
+\pard\li360\fi-360\bullet  On iPad: save screenshots to \b Files → iCloud Drive → Screenshots\b0\par
+\pard\li360\fi-360\bullet  Mac path: \f1\fs18 ~/Library/Mobile Documents/com~apple~CloudDocs/Screenshots\f0\fs22\par
+\par
+\pard\sb160\sa40\b\fs24 Watch mode (leave running on your Mac)\b0\par
+\par
+\f1\fs18\cf2
+python3 watch_and_import.py \\\line
+    ~/Library/Mobile\\ Documents/com~apple~CloudDocs/Screenshots \\\line
+    --group "Fire Defence"\line
+\f0\fs22\cf1\par
+\par
+\pard Every time you drop screenshots into the watched folder from your iPad\par
+\pard (they sync automatically via iCloud), the script:\par
+\pard\li360\fi-360 Waits 3 seconds for the batch to finish syncing.\par
+\pard\li360\fi-360 Stitches them vertically, trimming duplicate scroll regions.\par
+\pard\li360\fi-360 Saves a PDF next to the originals.\par
+\pard\li360\fi-360 Imports it into the specified DEVONthink group.\par
+\par
+\pard\sb160\sa40\b\fs24 One-off manual stitch\b0\par
+\par
+\f1\fs18\cf2
+python3 stitch_to_devonthink.py \\\line
+    ~/Desktop/page1.png ~/Desktop/page2.png ~/Desktop/page3.png \\\line
+    --import \\\line
+    --group "Fire Defence"\line
+\f0\fs22\cf1\par
+\par
+\pard\brdrb\brdrs\brdrw10\brdr0\par
+\par
+\pard\sb200\sa60\b\fs28 Choosing the right method\b0\par
+\par
+\b Situation  |  Best method\b0\par
+\b Web page in Safari  |  Method 1 (Full Page screenshot)\b0\par
+\b PDF viewer, email, map, or any other app  |  Method 2 (Shortcut)\b0\par
+\b Need best quality / automatic trimming of overlap  |  Method 3 (Mac script)\b0\par
+\b No Mac available  |  Method 2 (Shortcut)\b0\par
+}

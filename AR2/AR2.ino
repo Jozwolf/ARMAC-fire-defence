@@ -148,11 +148,14 @@ OneWire oneWire(TEMP_ONEWIRE_PIN);
 DallasTemperature dallas(&oneWire);
 
 // ====================== DS18B20: Address-locked mapping ==================
-// T1: 28 5B 83 57 00 00 00 13  -> EXT_TEMP
-// T2: 28 2E 53 57 00 00 00 3E  -> INT_TEMP
-// T3: 28 11 F1 35 00 00 00 D0  -> EXT2_TEMP
-DeviceAddress ADDR_T1 = {0x28,0x5B,0x83,0x57,0x00,0x00,0x00,0x13};
-DeviceAddress ADDR_T2 = {0x28,0x2E,0x53,0x57,0x00,0x00,0x00,0x3E};
+// T1: 28 2E 53 57 00 00 00 3E  -> EXT_TEMP   (outside)
+// T2: 28 5B 83 57 00 00 00 13  -> INT_TEMP   (inside the pump shed)
+// T3: 28 11 F1 35 00 00 00 D0  -> EXT2_TEMP  (outside 2)
+// 2026-11-03: T1/T2 addresses swapped. At Fairhaven the probe 28 5B 83 57... is the one in the
+// shed (reads 4-5 C above the other two and rises after a pump run), so it was being reported
+// as outside. Confirm on site by warming each probe in turn.
+DeviceAddress ADDR_T1 = {0x28,0x2E,0x53,0x57,0x00,0x00,0x00,0x3E};
+DeviceAddress ADDR_T2 = {0x28,0x5B,0x83,0x57,0x00,0x00,0x00,0x13};
 DeviceAddress ADDR_T3 = {0x28,0x11,0xF1,0x35,0x00,0x00,0x00,0xD0};
 
 // ====================== DS18B20: resilience state =======================
@@ -224,9 +227,47 @@ static const float WL_FAIL_HIGH_V = 4.60f;
 static bool wlFail = false;
 static unsigned long wlBadSinceMs = 0, wlGoodSinceMs = 0;
 
+// Tank level de-glitch (2026-11-03). Fairhaven showed brief 10-20 cm blips, mostly a single
+// 2 s report, daytime only, no weather link: electrical noise on single ADC samples (12 V loop-supply
+// ripple / ground offset; 1 ADC count = 0.7 cm). Two stages:
+//  1) each call takes the median of WL_SAMPLES quick readings (~2 ms);
+//  2) the level reported is the median of the last WL_WINDOW calls (~5 s at 10 Hz).
+// Real level changes are slow (pump flat out ~1.5 cm/min), so a 5 s median costs nothing.
+// Checked against 10 days of Fairhaven HA data: blips cut by ~70-85 %, pump drop preserved.
+static const uint8_t WL_SAMPLES = 9;
+static const uint8_t WL_WINDOW  = 51;
+
+static int readTankRawMedian() {
+  int v[WL_SAMPLES];
+  for (uint8_t i = 0; i < WL_SAMPLES; i++) {
+    v[i] = analogRead(TANK_SENSOR_PIN);
+    delayMicroseconds(200);  // spread over ~2 ms so one ripple spike can't hit them all
+  }
+  for (uint8_t i = 1; i < WL_SAMPLES; i++) {  // insertion sort
+    int x = v[i]; int8_t j = i - 1;
+    while (j >= 0 && v[j] > x) { v[j + 1] = v[j]; j--; }
+    v[j + 1] = x;
+  }
+  return v[WL_SAMPLES / 2];
+}
+
+static float wlDeglitch(float depthM) {
+  static float buf[WL_WINDOW];
+  static uint8_t n = 0, head = 0;
+  buf[head] = depthM; head = (head + 1) % WL_WINDOW; if (n < WL_WINDOW) n++;
+  float s[WL_WINDOW];
+  for (uint8_t i = 0; i < n; i++) s[i] = buf[i];
+  for (uint8_t i = 1; i < n; i++) {  // insertion sort, <= 51 values
+    float x = s[i]; int j = i - 1;
+    while (j >= 0 && s[j] > x) { s[j + 1] = s[j]; j--; }
+    s[j + 1] = x;
+  }
+  return s[n / 2];
+}
+
 float readWaterLevel() {
   if (SIMULATION_MODE && SIMULATE_TANK_WATER_LEVEL) return SIMULATED_WATER_LEVEL;
-  int raw = analogRead(TANK_SENSOR_PIN);
+  int raw = readTankRawMedian();
   float voltage = (raw / 1023.0f) * 5.0f;
   {
     const unsigned long nowMs = millis();
@@ -244,7 +285,7 @@ float readWaterLevel() {
   // dry/gel/recirc thresholds could never trigger.
   float depthM  = WL_M_PER_V * (voltage - WL_ZERO_V);
   if (depthM < 0.0f) depthM = 0.0f;
-  return depthM;
+  return wlDeglitch(depthM);
 }
 
 // Water pressure node: read raw voltage at SFS input

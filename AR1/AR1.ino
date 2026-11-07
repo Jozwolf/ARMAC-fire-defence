@@ -1,3 +1,12 @@
+// LAST MODIFIED: 2026-11-05 AEST — FRAME_REJECT switch (default 0 = count only). Set to 1 to drop
+//   frames from AR3 with a bad/missing checksum and unframed text. Tested ON at TestSys 5 Nov.
+// LAST MODIFIED: 2026-11-04 AEST — HB from AR3 read from the value after "HB:" (works framed);
+//   a queued new command cancels the previous command's retries. For AR3's framed ACK/HB:0.
+// LAST MODIFIED: 2026-11-04 AEST — Backup link receive. The R4 SoftwareSerial receiver sometimes
+//   holds back the last 1-2 bytes of a burst until the next one starts; AR1 now accepts a backup
+//   frame whose checksum verifies after 0.5 s quiet, else waits up to 2.5 s for the held bytes.
+//   Frames wait up to 0.5 s for '>' (was a 25 ms gap). TX window timed from the active path only;
+//   on backup (full duplex) AR1 sends anyway if it has not sent for 4 s.
 // LAST MODIFIED: 2026-11-02 AEST — Restart safety. After any restart AR1 restores the saved mode
 //   (it forced Manual, which took AR3 out of Auto for ~5 min). EEPROM mode 2 = Auto because MQTT
 //   was lost (MQTT back -> Manual, as before). Also fixed: MQTT loss while already in Auto no
@@ -273,7 +282,25 @@ static unsigned long primaryPathLastTelMs = 0;        // millis() when Serial1 l
 static unsigned long swPathLastTelMs = 0;             // millis() when swSerial last delivered telemetry
 static unsigned long ar3FrameEndMs = 0;               // millis() of last AR3 telemetry; drives TX window
 static const unsigned long TX_GUARD_MS = 5UL;         // guard delay after AR3 frame before AR1 may TX
+static const unsigned long TX_WINDOW_MAX_MS = 500UL;  // ...and AR1 must TX within 0.5 s of it (4 Nov 2026)
+// TX window: AR1 may transmit only between 5 ms and 0.5 s after the end of AR3's latest
+// telemetry frame. AR3 sends every 2 s and a frame takes ~0.35 s, so this keeps AR1 clear of
+// AR3's next frame. Before 4 Nov the window had no upper limit: a STAT due on AR1's own 5 s
+// timer went out immediately even if AR3 had started its next frame, and the two collided
+// every 10 s whenever the timers drifted into step. If AR1 misses the window it waits for the next.
+static unsigned long ar1SwLastTxMs = 0;  // last AR1 transmit on the backup path
+static inline bool txWindowOpen() {
+  // Backup is two separate wires (full duplex), so collisions can't happen there. If no
+  // window has opened for 4 s (e.g. AR3's frames all arriving late), send anyway rather
+  // than starve AR3 of STAT/heartbeat.
+  if (ar3ActivePath == PATH_BACKUP && (millis() - ar1SwLastTxMs) > 4000UL) return true;
+  if (ar3FrameEndMs == 0) return false;
+  const unsigned long age = millis() - ar3FrameEndMs;
+  return age >= TX_GUARD_MS && age <= TX_WINDOW_MAX_MS;
+}
 static const unsigned long PRIMARY_FAIL_MS = 15000UL; // switch to backup after 15s silence on primary
+static const unsigned long PRIMARY_STEADY_MS = 60000UL; // on backup: RS485 must be steady this long before switching back (stops flapping)
+static unsigned long primarySteadySinceMs = 0;          // when RS485 telemetry resumed without a gap (0 = not steady)
 static unsigned long lastPathPublishMs = 0;
 static const unsigned long PATH_PUBLISH_INTERVAL_MS = 30000UL;
 // Test hook: when true, tickPathWatchdog() holds the current path and won't auto-switch.
@@ -490,7 +517,19 @@ static unsigned long lastWifiRetryMs = 0;
 const unsigned long WIFI_RETRY_INTERVAL_MS = 30000;  // 30 s between WiFi re-attempts
 
 // RS-485 helpers/checksums
-// XOR/hex checksum — matches AR3 fsAddChecksum() exactly
+// CRC-8 (polynomial 0x07) over a message, matching AR3. Replaced the old XOR byte
+// checksum on 4 Nov 2026: CRC-8 also catches double-bit errors, short noise bursts
+// and swapped bytes, which XOR misses.
+static uint8_t crc8(const String &s, size_t n) {
+  uint8_t c = 0;
+  for (size_t i = 0; i < n; ++i) {
+    c ^= (uint8_t)s[i];
+    for (uint8_t b = 0; b < 8; ++b) c = (c & 0x80) ? (uint8_t)((c << 1) ^ 0x07) : (uint8_t)(c << 1);
+  }
+  return c;
+}
+
+// CRC-8/hex checksum — matches AR3 fsAddChecksum() exactly
 static bool verifyChecksum(String message) {
   if (message == "PING_AR3" || message == "PONG_AR3" || message == "PING_AR1" || message == "PONG_AR1") {
     return true;
@@ -505,17 +544,92 @@ static bool verifyChecksum(String message) {
   String payload = message.substring(0, sep);
   String chkStr = message.substring(sep + 1);
   chkStr.trim();
-  uint8_t calc = 0;
-  for (size_t i = 0; i < payload.length(); ++i) calc ^= (uint8_t)payload[i];
+  if (chkStr.length() != 2 || !isHexadecimalDigit(chkStr[0]) || !isHexadecimalDigit(chkStr[1])) return false;
+  uint8_t calc = crc8(payload, payload.length());
   uint8_t rx = (uint8_t)strtoul(chkStr.c_str(), nullptr, 16);
   return (calc == rx);
 }
 static String addChecksum(String message) {
-  uint8_t calc = 0;
-  for (size_t i = 0; i < message.length(); ++i) calc ^= (uint8_t)message[i];
   char buf[3];
-  snprintf(buf, sizeof(buf), "%02X", calc);
+  snprintf(buf, sizeof(buf), "%02X", crc8(message, message.length()));
   return message + "|" + buf;
+}
+
+// Frame check, COUNT ONLY (4 Nov 2026): every frame from AR3 is checked and counted,
+// but frames are still accepted exactly as before. Counts go to HA (home/ar3/frame_check)
+// every 60 s and to the serial log every 10 min. Rejection comes later, once the
+// counts show every message type passing.
+// FRAME_REJECT 1 = drop frames from AR3 with a bad or missing checksum (and unframed text).
+// 0 = count only. Committed as 0 until tested on TestSys and loaded at Fairhaven on site.
+#ifndef FRAME_REJECT
+#define FRAME_REJECT 0
+#endif
+#define FRAME_ACTION_TXT (FRAME_REJECT ? "), rejected: " : "), still accepted: ")
+static uint32_t fcOk = 0, fcBad = 0, fcRaw = 0;       // frames AR1 received from AR3
+static long ar3FcOk = -1, ar3FcBad = -1, ar3FcNoChk = -1;  // AR3's counts of frames from AR1
+static unsigned long fcLastBadLogMs = 0, fcLastRawLogMs = 0;
+static void frameCount(bool ok, const String &msg, const __FlashStringHelper *path) {
+  if (ok) { fcOk++; return; }
+  fcBad++;
+  if (fcLastBadLogMs == 0 || millis() - fcLastBadLogMs >= 10000UL) {
+    fcLastBadLogMs = millis();
+    Serial.print(F("[FRAME] bad checksum ("));
+    Serial.print(path);
+    Serial.print(FRAME_ACTION_TXT);
+    Serial.println(msg.substring(0, 80));
+  }
+}
+static void frameRawCount(const String &chunk, const __FlashStringHelper *path) {
+  fcRaw++;
+  if (fcLastRawLogMs == 0 || millis() - fcLastRawLogMs >= 60000UL) {
+    fcLastRawLogMs = millis();
+    Serial.print(F("[FRAME] unframed text ("));
+    Serial.print(path);
+    Serial.print(FRAME_ACTION_TXT);
+    Serial.println(chunk.substring(0, 60));
+  }
+}
+static unsigned long swRxOnTime = 0, swRxTimeoutOk = 0, swRxLate = 0, swRxAbandoned = 0;
+static void tickFrameStats() {
+  static unsigned long lastPubMs = 0, lastLogMs = 0;
+  const unsigned long now = millis();
+  if (now - lastPubMs >= 60000UL) {
+    lastPubMs = now;
+    if (mqttClient.connected()) {
+      char buf[160];
+      snprintf(buf, sizeof(buf),
+               "{\"ok\":%lu,\"bad\":%lu,\"raw\":%lu,\"ar3_ok\":%ld,\"ar3_bad\":%ld,\"ar3_nochk\":%ld}",
+               (unsigned long)fcOk, (unsigned long)fcBad, (unsigned long)fcRaw, ar3FcOk, ar3FcBad, ar3FcNoChk);
+      mqttClient.publish("home/ar3/frame_check", buf);
+    }
+  }
+  if (now - lastLogMs >= 600000UL) {
+    lastLogMs = now;
+    Serial.print(F("[FRAME] since boot: AR1 got ok="));
+    Serial.print(fcOk);
+    Serial.print(F(" bad="));
+    Serial.print(fcBad);
+    Serial.print(F(" unframed="));
+    Serial.print(fcRaw);
+    Serial.print(F(" | AR3 got ok="));
+    Serial.print(ar3FcOk);
+    Serial.print(F(" bad="));
+    Serial.print(ar3FcBad);
+    Serial.print(F(" nochk="));
+    Serial.println(ar3FcNoChk);
+    if (swRxOnTime + swRxTimeoutOk + swRxLate + swRxAbandoned > 0) {
+      Serial.print(F("[FRAME] backup frames since boot: on-time=")); Serial.print(swRxOnTime);
+      Serial.print(F(" checksum-on-timeout=")); Serial.print(swRxTimeoutOk);
+      Serial.print(F(" late=")); Serial.print(swRxLate);
+      Serial.print(F(" abandoned=")); Serial.println(swRxAbandoned);
+    }
+  }
+}
+
+// Send on the backup path and note when (used by txWindowOpen's backup fallback).
+static inline void swTx(const String &f) {
+  swSerial.print(f);
+  ar1SwLastTxMs = millis();
 }
 
 // --- AR1 → AR3: Heartbeat control — sent on active path only ---
@@ -523,7 +637,7 @@ static inline void rs485SendHB(bool on) {
   String payload = String("HB:") + (on ? "1" : "0");
   String framedData = "<" + addChecksum(payload) + ">";
   if (ar3ActivePath == PATH_BACKUP) {
-    swSerial.print(framedData);
+    swTx(framedData);
   } else {
     Serial1.print(framedData);
     Serial1.flush();
@@ -582,7 +696,8 @@ static inline void onRS485FrameFromAR3(const String& msg) {
 
   // 1) Heartbeat control (HB:0/1) — keep your existing behavior
   if (msg.startsWith("HB:")) {
-    bool on = (msg.endsWith("1"));
+    // Read the value after "HB:"; framed messages end in a checksum ("HB:1|3F").
+    bool on = (msg.length() > 3 && msg.charAt(3) == '1');
     onHBControlFromAR3(on);  // already present
     return;
   }
@@ -682,7 +797,7 @@ bool RS485Send(String data) {
 #if RS485_ENABLE && !RS485_RX_ONLY
   String framedData = "<" + addChecksum(data) + ">";
   if (ar3ActivePath == PATH_BACKUP) {
-    swSerial.print(framedData);
+    swTx(framedData);
   } else {
     Serial1.print(framedData);
     Serial1.flush();
@@ -693,9 +808,15 @@ bool RS485Send(String data) {
 #endif
 }
 
+// Inside a <...> frame, wait up to FRAME_TIMEOUT_MS for the closing '>' instead of
+// cutting at the 25 ms gap. The gap is measured from when AR1 reads a char, so a busy
+// loop (WiFi/MQTT) was splitting frames in two. 25 ms still applies to unframed text.
+static const unsigned long FRAME_TIMEOUT_MS = 500UL;
+
 String RS485Receive() {
   static String buffer = "";
   static unsigned long lastRx = 0;
+  static bool inFrame = false;
   const unsigned long FRAME_GAP_MS = 25;
   while (Serial1.available()) {
     char c = (char)Serial1.read();
@@ -718,18 +839,21 @@ String RS485Receive() {
     if (c == '<') {
       buffer = "";
       lastRx = now;
+      inFrame = true;
       continue;
     }
     if (c == '>') {
       String msg = buffer;
       buffer = "";
       lastRx = now;
+      inFrame = false;
       if (msg.length() == 0) continue;
       bool ok = verifyChecksum(msg);
-      if (!ok) {
+      frameCount(ok, msg, F("RS485"));
+      if (!ok && !FRAME_REJECT) {
         if (msg == "PING" || msg.startsWith("PING_") || msg.startsWith("PONG_")) ok = true;
+        if (msg.indexOf(':') >= 0) ok = true;
       }
-      if (!ok && msg.indexOf(':') >= 0) ok = true;
       if (RS485Debug) {
         Serial.print("RS485 frame: [");
         Serial.print(msg);
@@ -745,33 +869,53 @@ String RS485Receive() {
     buffer += c;
     lastRx = now;
   }
-  if (buffer.length() > 0 && (millis() - lastRx) > FRAME_GAP_MS) {
+  if (buffer.length() > 0 && (millis() - lastRx) > (inFrame ? FRAME_TIMEOUT_MS : FRAME_GAP_MS)) {
     String chunk = buffer;
     chunk.trim();
     buffer = "";
-    if (chunk.length() > 0) return chunk;
+    inFrame = false;
+    if (chunk.length() > 0) {
+      frameRawCount(chunk, F("RS485"));
+      if (!FRAME_REJECT) return chunk;
+    }
   }
   return "";
 }
 
 // Backup path receiver — mirrors RS485Receive() on swSerial
+// The R4 SoftwareSerial receiver holds back the last 1-2 bytes of a burst until the
+// next burst starts (~2 s later), found 4 Nov 2026. So on backup: when a frame goes quiet
+// for FRAME_TIMEOUT_MS, accept it if its checksum already verifies (only '>' held back);
+// otherwise keep waiting up to SW_FRAME_ABANDON_MS for the held-back byte(s).
+static const unsigned long SW_FRAME_ABANDON_MS = 2500UL;
+static bool swFrameLate = false;   // last returned frame completed only when the next burst began
+
 static String SwSerialReceive() {
   static String swBuf = "";
   static unsigned long swLastRx = 0;
+  static bool swInFrame = false;
+  static bool swTimeoutChecked = false;
   const unsigned long FRAME_GAP_MS = 25;
+  swFrameLate = false;
   while (swSerial.available()) {
     char c = (char)swSerial.read();
     unsigned long now = millis();
     if ((uint8_t)c >= 0x80) continue;
-    if (c == '<') { swBuf = ""; swLastRx = now; continue; }
+    if (c == '<') { swBuf = ""; swLastRx = now; swInFrame = true; swTimeoutChecked = false; continue; }
     if (c == '>') {
       String msg = swBuf;
+      const bool wasLate = swInFrame && swTimeoutChecked;
       swBuf = "";
       swLastRx = now;
-      if (msg.length() == 0) continue;
+      swInFrame = false;
+      if (msg.length() == 0) continue;   // e.g. the held-back '>' of a frame accepted on timeout
       bool ok = verifyChecksum(msg);
-      if (!ok && (msg == "PING" || msg.startsWith("PING_") || msg.startsWith("PONG_"))) ok = true;
-      if (!ok && msg.indexOf(':') >= 0) ok = true;
+      frameCount(ok, msg, F("backup"));
+      if (ok) { if (wasLate) { swRxLate++; swFrameLate = true; } else swRxOnTime++; }
+      if (!ok && !FRAME_REJECT) {
+        if (msg == "PING" || msg.startsWith("PING_") || msg.startsWith("PONG_")) ok = true;
+        if (msg.indexOf(':') >= 0) ok = true;
+      }
       if (ok) {
         onRS485FrameFromAR3(msg);
         return msg;
@@ -781,11 +925,34 @@ static String SwSerialReceive() {
     swBuf += c;
     swLastRx = now;
   }
-  if (swBuf.length() > 0 && (millis() - swLastRx) > FRAME_GAP_MS) {
+  if (swBuf.length() > 0) {
+    const unsigned long idle = millis() - swLastRx;
+    if (swInFrame) {
+      if (idle > FRAME_TIMEOUT_MS && !swTimeoutChecked) {
+        swTimeoutChecked = true;
+        if (verifyChecksum(swBuf)) {
+          String msg = swBuf;
+          swBuf = "";
+          swInFrame = false;
+          swRxTimeoutOk++;
+          frameCount(true, msg, F("backup"));
+          onRS485FrameFromAR3(msg);
+          return msg;
+        }
+      }
+      if (idle <= SW_FRAME_ABANDON_MS) return "";
+      swRxAbandoned++;
+    } else if (idle <= FRAME_GAP_MS) {
+      return "";
+    }
     String chunk = swBuf;
     chunk.trim();
     swBuf = "";
-    if (chunk.length() > 0) return chunk;
+    swInFrame = false;
+    if (chunk.length() > 0) {
+      frameRawCount(chunk, F("backup"));
+      if (!FRAME_REJECT) return chunk;
+    }
   }
   return "";
 }
@@ -805,6 +972,7 @@ static void tickPathWatchdog() {
       if (rs485Silent) {
         ar3ActivePath = PATH_BACKUP;
         ar3Ready = false;  // re-arm gate until backup path confirms AR3 alive
+        primarySteadySinceMs = 0;
         Serial.println(F("[PATH] Primary RS485 silent — switched to BACKUP SoftwareSerial"));
         if (mqttClient.connected()) {
           mqttClient.publish("home/ar3/comms_path", "backup", true);
@@ -813,8 +981,18 @@ static void tickPathWatchdog() {
         lastPathPublishMs = now;
       }
     } else {
-      // Recovery: if Serial1 telemetry has resumed recently, switch back to primary
-      if (primaryPathLastTelMs > 0 && (now - primaryPathLastTelMs) < 5000UL) {
+      // Recovery: switch back only after Serial1 telemetry has arrived steadily (no gap of
+      // 5 s or more) for PRIMARY_STEADY_MS. A flaky RS485 wire then stays on backup instead
+      // of flipping between paths every ~15 s.
+      const bool primaryFresh = (primaryPathLastTelMs > 0 && (now - primaryPathLastTelMs) < 5000UL);
+      if (!primaryFresh) {
+        primarySteadySinceMs = 0;
+      } else if (primarySteadySinceMs == 0) {
+        primarySteadySinceMs = now;
+        Serial.println(F("[PATH] Primary RS485 heard again — returning to PRIMARY after 60 s steady"));
+      }
+      if (primaryFresh && primarySteadySinceMs != 0 && (now - primarySteadySinceMs) >= PRIMARY_STEADY_MS) {
+        primarySteadySinceMs = 0;
         ar3ActivePath = PATH_PRIMARY;
         Serial.println(F("[PATH] Primary RS485 restored — switched back to PRIMARY"));
         if (mqttClient.connected()) {
@@ -840,9 +1018,13 @@ static void tickPathWatchdog() {
 
 static inline void tickFastAckRetry() {
   if (!FS_waitAck) return;
+  // A newer command is queued: it carries the current state, so drop the old
+  // command's retries (stops a stale pump ON going out after an OFF).
+  if (pendingTxCmd) { FS_waitAck = false; return; }
 
   unsigned long now = millis();
   if ((now - FS_ackT0) < FS_ACK_TIMEOUT_MS) return;
+  if (FS_ackRetries < FS_ACK_MAX_RETRY && !txWindowOpen()) return;  // retries also wait for the TX window
 
   if (FS_ackRetries < FS_ACK_MAX_RETRY) {
     FS_ackRetries++;
@@ -882,6 +1064,7 @@ static inline void tickFastAckRetry() {
     FS_waitAckP4 = (uint8_t)p4;
 
     rs485SendRelayCmd(FS_waitAckSeq, pump01, p1, p2, p3, p4);
+    ar3FrameEndMs = 0;  // one transmission per window
   } else {
     FS_waitAck = false;  // give up
   }
@@ -890,8 +1073,7 @@ static inline void tickFastAckRetry() {
 // --- TX window dispatcher (Phase 5) ---
 // Opens 5 ms after each AR3 telemetry frame; dispatches one pending frame per window, CMD > STAT > CFG.
 static void tickTxWindow() {
-  if (ar3FrameEndMs == 0) return;
-  if (millis() - ar3FrameEndMs < TX_GUARD_MS) return;
+  if (!txWindowOpen()) return;
   if (!pendingTxCmd && !pendingTxStat && !pendingTxCfg) return;
 
   if (pendingTxCmd) {
@@ -2379,6 +2561,12 @@ static void processRS485(String rs) {
         mqttClient.publish(key == "RST" ? "home/ar3/last_reset" : "home/ar2/last_reset",
                            resetCauseText(c), true);
       }
+    } else if (key == "FOK" || key == "FBAD" || key == "FNC") {
+      // AR3's frame-check counts (frames it received from AR1)
+      if (val.length() > 0 && isDigit(val[0])) {
+        long &dst = (key == "FOK") ? ar3FcOk : (key == "FBAD") ? ar3FcBad : ar3FcNoChk;
+        dst = val.toInt();
+      }
     } else if (key == "FSMODE") {
       bool newAutoMode = (val.toInt() != 0);
       if (newAutoMode != ar3InAutoMode) {
@@ -2862,7 +3050,10 @@ void loop() {
   if (rs485Data.length() > 0) {
     if (rs485Data.indexOf("INT_TEMP:") >= 0 || rs485Data.indexOf("WATER_LEVEL:") >= 0) {
       primaryPathLastTelMs = millis();
-      ar3FrameEndMs = millis();
+      // Time the TX window from this path only when we transmit on it. On backup,
+      // AR3 sends its swSerial copy right after the RS485 one; timing from RS485
+      // made AR1 transmit over that copy and lose its '<'.
+      if (ar3ActivePath == PATH_PRIMARY) ar3FrameEndMs = millis();
     }
     processRS485(rs485Data);
   }
@@ -2876,8 +3067,10 @@ void loop() {
     if (swData.length() > 0) {
       if (swData.indexOf("INT_TEMP:") >= 0 || swData.indexOf("WATER_LEVEL:") >= 0) {
         swPathLastTelMs = millis();  // always track backup liveness
+        // A late frame completes only as AR3's next burst begins, so its end is
+        // ~300 ms away (267 chars at 9600 baud): open the window after that.
         if (ar3ActivePath == PATH_BACKUP) {
-          ar3FrameEndMs = millis();
+          ar3FrameEndMs = millis() + (swFrameLate ? 300UL : 0UL);
         }
       }
       if (ar3ActivePath == PATH_BACKUP) {
@@ -2888,6 +3081,7 @@ void loop() {
 
   // Path watchdog: detect primary failure / recovery
   tickPathWatchdog();
+  tickFrameStats();
 
   // TX window: dispatch pending CMD/STAT/CFG frames after guard delay
   tickTxWindow();

@@ -21,7 +21,8 @@ Each sketch starts with a dated change log describing recent changes.
 ## Notes
 
 - All three boards run a hardware watchdog and restart themselves if they stop responding or lose their connection for too long. A restart keeps the system in Autonomous mode if it was in that mode.
-- A TestSys mode (AR1 pin D13 strapped to GND) runs a second, test copy of the hardware against a separate Home Assistant instance.
+- A TestSys mode (AR1 pin A3 and AR3 pin D11 strapped to GND) runs a second, test copy of the hardware against a separate Home Assistant instance.
+- AR1 and AR3 talk over RS-485, with a two-wire backup link (SoftwareSerial) that AR1 switches to if RS-485 goes quiet for 15 s, returning after 60 s of steady RS-485. Every message carries a CRC-8 checksum. By default bad messages are only counted (reported to Home Assistant); setting `FRAME_REJECT` to 1 in both AR1 and AR3 makes them drop bad messages.
 - The design, wiring and test history are documented in the Development Notes and Technical Notes at <https://armac.au>.
 
 This code is shared as-is for others building similar systems. It controls pumps and valves in a fire emergency, so test any adaptation thoroughly before relying on it.

@@ -1,3 +1,8 @@
+// LAST MODIFIED: 2026-11-05 AEST — FRAME_REJECT switch (default 0 = count only). Set to 1 to ignore
+//   frames from AR1 with a bad/missing checksum. Tested ON at TestSys 5 Nov. Enable with AR1.
+// LAST MODIFIED: 2026-11-04 AEST — ACKs and HB:0 to AR1 are now framed <...|CRC> like telemetry,
+//   so AR1 sees the ACK and stops re-sending commands. Needs AR1 4 Nov or later (HB parse fix).
+//   An applied pump change is now ACKed at once (was only on AR1's duplicate retry).
 // LAST MODIFIED: 2026-11-02 AEST — Restart safety (build 2026-11-02a). A restart no longer drops
 //   Auto: AR3 keeps "in Auto", the fallback stage and the tank estimate in EEPROM and resumes them
 //   at boot (it used to wait 5 min and restart the fallback as "no rise seen"). Connection check:
@@ -257,12 +262,61 @@ static inline void rs485SendLine(const String &s) {
   RS485_PORT.flush();
 }
 
+// CRC-8 (polynomial 0x07), matching AR1. Replaced the old XOR byte checksum on
+// 4 Nov 2026: CRC-8 also catches double-bit errors, short noise bursts and swapped bytes.
+static uint8_t crc8(const String &s, size_t n) {
+  uint8_t c = 0;
+  for (size_t i = 0; i < n; ++i) {
+    c ^= (uint8_t)s[i];
+    for (uint8_t b = 0; b < 8; ++b) c = (c & 0x80) ? (uint8_t)((c << 1) ^ 0x07) : (uint8_t)(c << 1);
+  }
+  return c;
+}
+
 static String fsAddChecksum(const String &msg) {
-  uint8_t sum = 0;
-  for (size_t i = 0; i < msg.length(); ++i) sum ^= (uint8_t)msg[i];
   char hex[3];
-  snprintf(hex, sizeof(hex), "%02X", sum);
+  snprintf(hex, sizeof(hex), "%02X", crc8(msg, msg.length()));
   return msg + "|" + hex;
+}
+
+// Frame check, COUNT ONLY (4 Nov 2026): frames from AR1 are checked and counted but
+// still handled exactly as before. Counts go to AR1 in telemetry (FOK/FBAD/FNC) and
+// to the serial log every 10 min. Rejection comes later.
+// FRAME_REJECT 1 = ignore frames from AR1 with a bad or missing checksum. 0 = count only.
+// Committed as 0 until tested on TestSys and loaded at Fairhaven on site.
+#ifndef FRAME_REJECT
+#define FRAME_REJECT 0
+#endif
+static unsigned long fcOk = 0, fcBad = 0, fcNoChk = 0;
+static unsigned long fcLastBadLogMs = 0, fcLastNoChkLogMs = 0;
+// Returns true if the frame should be handled.
+static bool frameCheck(const String &f, bool viaBackup) {
+  const int bar = f.lastIndexOf('|');
+  const String chk = (bar >= 0) ? f.substring(bar + 1) : String();
+  if (bar < 0 || chk.length() != 2 || !isHexadecimalDigit(chk[0]) || !isHexadecimalDigit(chk[1])) {
+    fcNoChk++;
+    if (FRAME_REJECT && (fcLastNoChkLogMs == 0 || millis() - fcLastNoChkLogMs >= 10000UL)) {
+      fcLastNoChkLogMs = millis();
+      Serial.print(F("[FRAME] no checksum ("));
+      Serial.print(viaBackup ? F("backup") : F("RS485"));
+      Serial.print(F("), rejected: "));
+      Serial.println(f.substring(0, 80));
+    }
+    return !FRAME_REJECT;
+  }
+  if (crc8(f, bar) == (uint8_t)strtoul(chk.c_str(), nullptr, 16)) {
+    fcOk++;
+    return true;
+  }
+  fcBad++;
+  if (fcLastBadLogMs == 0 || millis() - fcLastBadLogMs >= 10000UL) {
+    fcLastBadLogMs = millis();
+    Serial.print(F("[FRAME] bad checksum ("));
+    Serial.print(viaBackup ? F("backup") : F("RS485"));
+    Serial.print(FRAME_REJECT ? F("), rejected: ") : F("), still accepted: "));
+    Serial.println(f.substring(0, 80));
+  }
+  return !FRAME_REJECT;
 }
 
 static void fsSendFramed(const String &payload) {
@@ -281,13 +335,13 @@ static void fsSendFramedBackup(const String &payload) {
   swSerial.print(frame);
 }
 
-// Send a raw line on both RS485 and backup SoftwareSerial (for ACKs).
-// swSerial suppressed when disabled (RS-485 active) — same WiFi protection as above.
+// Send ACKs and HB:0 on both RS485 and backup SoftwareSerial, framed with a CRC-8
+// like telemetry (4 Nov 2026; before that they were raw text, which AR1's command
+// logic never saw, so AR1 re-sent every command 4 times). Backup is suppressed while
+// swSerial is disabled (RS-485 active) — same WiFi protection as above.
 static inline void sendLineOnBothPaths(const String &s) {
-  rs485SendLine(s);
-  if (swSerialEnabled) {
-    swSerial.print(s);
-  }
+  fsSendFramed(s);
+  fsSendFramedBackup(s);
 }
 
 // ---------------- WiFi / UDP to AR2 ----------------
@@ -1261,7 +1315,7 @@ static void feedByte(uint8_t b) {
     f.trim();
     if (f.length()) {
       lastRs485RxMs = millis();  // RS-485 link alive — suppress swSerial TX
-      handleFrame(f);
+      if (frameCheck(f, false)) handleFrame(f);
     }
     return;
   }
@@ -1284,7 +1338,9 @@ static void feedByteSW(uint8_t b) {
     String f = swFrameBuf;
     swFrameBuf = "";
     f.trim();
-    if (f.length()) handleFrame(f);
+    if (f.length()) {
+      if (frameCheck(f, true)) handleFrame(f);
+    }
     return;
   }
   swFrameBuf += c;
@@ -1695,6 +1751,14 @@ static void applyPumpEdgeRaw(int requestOn, int seqVal) {
   pumpState = (requestOn != 0);
   lastChangeMs = now;
   cmdIgnoreUntilMs = now + CMD_SILENCE_MS;
+
+  // ACK the change straight away (4 Nov 2026). Before, an applied pump change was only
+  // ACKed when AR1's retry arrived as a duplicate SEQ, so every pump change went twice.
+  // Dropped commands (silence / opposite-direction guard) still get no ACK, so AR1 retries.
+  if (seqVal >= 0) {
+    String ack = "ACK:SEQ:" + String(seqVal & 0x0F) + "|PUMP:" + (pumpState ? "1" : "0");
+    sendLineOnBothPaths(ack);
+  }
 }
 
 static void applyPumpEdge(int requestOn, int seqVal) {
@@ -2068,7 +2132,23 @@ static void emitTelemetryIfDue() {
                + "|FB:" + String(!fsFbActive ? -1 : (fsFbStage < 0 ? 9 : fsFbStage))
                + "|RST:" + String(resetCause3)
                + "|RST2:" + String(ar2ResetCause)
+               // Button test until AR1 confirms: HB:0 inside telemetry too. The raw HB:0 line
+               // was lost on the backup path (bench 2026-11-03); telemetry gets through.
+               + ((testActive && !testHbOffSeen) ? "|HB:0" : "")
+               + "|FOK:" + String(fcOk) + "|FBAD:" + String(fcBad) + "|FNC:" + String(fcNoChk)
                + "|READY:1";
+
+  static unsigned long fcLastLogMs = 0;
+  if (now - fcLastLogMs >= 600000UL) {
+    fcLastLogMs = now;
+    fsLogTs();
+    Serial.print(F("[FRAME] since boot from AR1: ok="));
+    Serial.print(fcOk);
+    Serial.print(F(" bad="));
+    Serial.print(fcBad);
+    Serial.print(F(" nochk="));
+    Serial.println(fcNoChk);
+  }
 
   fsSendFramed(msg);
   fsSendFramedBackup(msg);  // backup path: AR1 uses this to detect primary recovery
@@ -2255,6 +2335,9 @@ static void tickAuto() {
     fsLastLoggedMode = fsModeCode;
   }
 
+  // Apply outputs before the status line below, so it shows this tick's relays, not last tick's.
+  fsApplyAutoOutputs();
+
   // C) Periodic status heartbeat every 30 s.
   static unsigned long fsAutoStatusMs = 0;
   if (millis() - fsAutoStatusMs >= 30000UL) {
@@ -2271,8 +2354,6 @@ static void tickAuto() {
     Serial.print(F(" P1="));    Serial.print(digitalRead(PIN_P1) == LOW ? 1 : 0);
     Serial.print(F(" P2="));    Serial.println(digitalRead(PIN_P2) == LOW ? 1 : 0);
   }
-
-  fsApplyAutoOutputs();
 }
 
 // ---------------- TEST (SIMCTRL to AR2) ----------------
@@ -2291,8 +2372,9 @@ static void startTest() {
   // 2) Tell AR2 which scenario to run (Scenario 1 = extended fire run)
   sendSimctrl(String("SIMCTRL:START:") + String(testScenarioId));
 
-  // 3) Force HB OFF on RS-485 so AUTO won’t drop out while we’re testing
-  rs485SendLine("HB:0");
+  // 3) Force HB OFF on RS-485 so AUTO won’t drop out while we’re testing.
+  //    Both paths: if RS-485 has failed, AR1 is listening on the backup path (2026-11-03).
+  sendLineOnBothPaths("HB:0");
   lastHbMs = 0;
 
   // 4) Pin local test/autonomous state
@@ -2945,7 +3027,7 @@ void loop() {
   static unsigned long lastHb0Ms = 0;
   if (testActive && !testHbOffSeen && millis() - lastHb0Ms >= 5000) {
     lastHb0Ms = millis();
-    rs485SendLine("HB:0");
+    sendLineOnBothPaths("HB:0");
   }
   if (testActive && testStopByHa) {
     fsLogTs();
